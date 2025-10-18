@@ -1,0 +1,1142 @@
+$schema: https://raw.githubusercontent.com/cursor-dev/cursorrules/main/schema.json
+
+# =====================================================================================
+# MAGGSOFT FRAMEWORK İLE ASP.NET CORE 8.0 PROJE GELİŞTİRME STANDARTLARI
+# =====================================================================================
+# Bu şablon, Maggsoft Framework tabanlı ASP.NET Core 8.0 projeleri için standart
+# mimari, kod kuralları ve best practice'leri içerir.
+# =====================================================================================
+
+# ⚠️ GENEL PROJE BİLGİLERİ (PROJE BAŞINDA GÜNCELLENMELİ)
+# =====================================================================================
+solution:
+  name: "{PROJE_ADI}"  # Örnek: TrinkEmlak, ECommerceApp, HrmsSystem
+  description: "{PROJE_AÇIKLAMASI}"  # Örnek: Emlak Açık Artırma Sistemi
+  type: "backend-api"  # backend-api, web-app, hybrid
+  
+  # Proje yapısı - Clean Architecture benzeri katmanlı mimari
+  folders:
+    - name: src
+      folders:
+        # =========================================================================
+        # DATA LAYER - Entity Tanımlamaları
+        # =========================================================================
+        - name: Libraries/Data
+          projects:
+            - name: "{solution.name}.Data.Mssql"
+              type: classlib
+              dependencies:
+                - Maggsoft.Data.Mssql
+              description: |
+                Database Entity'leri içerir
+                - Her entity ayrı dosyada tanımlanır
+                - Tüm entity'ler BaseEntity'den türetilir (Maggsoft.Data.Mssql.BaseEntity)
+                - Tüm ID'ler Guid tipinde olmalıdır
+                - Soft delete için Restore() metodu implement edilmelidir
+                - Enum'lar ayrı Enums/ klasöründe tanımlanır
+                - Navigation property'ler virtual olarak tanımlanır
+                - Audit fields: CreatedDate, CreatorUserId, UpdatedDate, UpdatedByUserId, UpdatedIP
+                - Her entity için XML summary açıklaması yazılmalıdır
+
+        # =========================================================================
+        # DTO LAYER - Data Transfer Objects
+        # =========================================================================
+        - name: Libraries/Dto
+          projects:
+            - name: "{solution.name}.Dto.Mssql"
+              type: classlib
+              dependencies:
+                - Maggsoft.Core
+              description: |
+                Database DTO'ları içerir
+                - Her DTO ayrı dosyada tanımlanır
+                - DTO'lar işlevlerine göre klasörlere ayrılır (User/, Product/, Order/ vb.)
+                - Her DTO dosyasında sadece bir class bulunur
+                - Create, Update, List, Filter, Summary gibi DTO tipleri kullanılır
+                - Data Annotations kullanılmaz, validasyon FluentValidation ile yapılır
+                - Her DTO için Türkçe XML summary açıklaması yazılmalıdır
+
+        # =========================================================================
+        # DATABASE LAYER - DbContext ve Migrations
+        # =========================================================================
+        - name: Libraries/Mssql
+          projects:
+            - name: "{solution.name}.Mssql"
+              type: classlib
+              dependencies:
+                - AspectCore.Abstractions
+                - FluentMigrator
+                - FluentMigrator.Runner
+                - FluentMigrator.Runner.SqlServer
+                - Maggsoft.Data
+                - Maggsoft.Mssql
+              references:
+                - ../Data/{solution.name}.Data.Mssql/{solution.name}.Data.Mssql.csproj
+              description: |
+                DbContext ve FluentMigrations içerir
+                - Her migration ayrı dosyada (Migrations/ klasöründe)
+                - MaggsoftMigration attribute'u kullanılır
+                - Migration format: [MaggsoftMigration("yyyy/MM/dd HH:mm:ss", "Description", "version")]
+                - DbContext'te global AsNoTracking aktif: QueryTrackingBehavior.NoTracking
+                - OnModelCreating'de entity konfigürasyonları yapılır
+
+        # =========================================================================
+        # SERVICE LAYER - Business Logic ve Data Access
+        # =========================================================================
+        - name: Libraries/Mssql.Services
+          projects:
+            - name: "{solution.name}.Mssql.Services"
+              type: classlib
+              dependencies:
+                - Maggsoft.Cache
+                - Maggsoft.Cache.MemoryCache
+                - Maggsoft.Mssql.Services
+                - AutoMapper
+              references:
+                - ../Data/{solution.name}.Data.Mssql/{solution.name}.Data.Mssql.csproj
+                - ../Dto/{solution.name}.Dto.Mssql/{solution.name}.Dto.Mssql.csproj
+                - ../Mssql/{solution.name}.Mssql/{solution.name}.Mssql.csproj
+              description: |
+                Servis Interface'leri ve Implementation'ları
+                - Her servis ayrı dosyada (Interfaces/ ve Services/ klasörlerinde)
+                - Repository pattern kullanılmaz, IMssqlRepository<T> kullanılır
+                - SaveChangesAsync her zaman en son çağrılır
+                - AutoMapping Mapping/ klasöründe yapılır
+                - BaseService'ten türetilen servislerde CurrentUserId ve RemoteIp kullanılır
+                - Maggsoft IoC için IService interface'inden türetilir
+                - Her servis için Utilities/, Constants/, Models/ klasörleri oluşturulabilir
+
+        # =========================================================================
+        # API LAYER - Presentation ve Endpoint'ler
+        # =========================================================================
+        - name: Presentation/Api
+          projects:
+            - name: "{solution.name}.Api"
+              type: webapi
+              dependencies:
+                - FluentValidation.AspNetCore
+                - Maggsoft.Framework
+                - Maggsoft.Endpoints
+                - Bogus
+                - Maggsoft.Cache
+                - Maggsoft.Cache.MemoryCache
+                - Serilog.AspNetCore
+                - Serilog.Sinks.MSSqlServer
+                - Serilog.Settings.Configuration
+                - Microsoft.AspNetCore.Identity.EntityFrameworkCore
+                - Microsoft.EntityFrameworkCore.SqlServer
+                - Microsoft.EntityFrameworkCore.Tools
+                - AspNetCoreRateLimit
+                - Asp.Versioning.Mvc
+                - Asp.Versioning.Mvc.ApiExplorer
+                - Quartz
+                - Quartz.Extensions.Hosting
+                - Azure.Storage.Blobs (opsiyonel)
+              references:
+                - ../../Libraries/Mssql.Services/{solution.name}.Mssql.Services/{solution.name}.Mssql.Services.csproj
+                - ../../Libraries/Mssql/{solution.name}.Mssql/{solution.name}.Mssql.csproj
+                - ../../Libraries/Data/{solution.name}.Data.Mssql/{solution.name}.Data.Mssql.csproj
+                - ../../Libraries/Dto/{solution.name}.Dto.Mssql/{solution.name}.Dto.Mssql.csproj
+              description: |
+                API katmanı - RESTful Web API
+                - Maggsoft.Framework.Middleware kullanılır
+                - JWT Authentication (Microsoft.AspNetCore.Identity)
+                - Result<T> pattern (Maggsoft.Core.Base)
+                - Serilog ile MSSQL'e loglama
+                - FluentValidation ile validasyon
+                - Seed data ve migration endpoint'leri
+                - SignalR Hub'ları (gerekliyse)
+                - Background Jobs (Quartz.NET)
+                - Rate Limiting (AspNetCoreRateLimit)
+                - API Versioning (Asp.Versioning)
+
+# =====================================================================================
+# PROJE KONFİGÜRASYONU
+# =====================================================================================
+options:
+  classlib:
+    removeClass1: true  # Class1.cs dosyasını kaldır
+    empty: true         # Boş proje oluştur
+  web:
+    empty: true
+  webapi:
+    empty: true
+
+# =====================================================================================
+# SEED DATA KONFİGÜRASYONU
+# =====================================================================================
+seed_data:
+  enabled: true  # SeedData:Enabled appsettings'ten kontrol edilir
+  admin_user:
+    email: "admin@gmail.com"
+    phone: "5551234567"
+    password: "Super123!"
+  use_bogus: true  # Test verisi için Bogus library kullanılır
+
+# =====================================================================================
+# PAKET YÖNETİMİ
+# =====================================================================================
+package_management:
+  central_package_management: true  # Central Package Management aktif
+  directory_packages_props: true    # Directory.Packages.props kullanılır
+  nuget_packages:
+    # Maggsoft Framework (Ana Paketler)
+    maggsoft_core: "2.1.7"
+    maggsoft_data: "2.1.7"
+    maggsoft_framework: "2.6.3"
+    maggsoft_data_mssql: "2.1.0"
+    maggsoft_mssql: "2.1.5"
+    maggsoft_cache: "2.1.0"
+    maggsoft_cache_memorycache: "2.0.7"
+    maggsoft_services: "2.0.8"
+    maggsoft_aspect_core: "1.0.15"
+    maggsoft_mssql_services: "2.1.0"
+    maggsoft_endpoints: "2.0.7"
+    maggsoft_dto_mssql: "1.0.2"
+    maggsoft_logging: "1.0.6"
+    
+    # Microsoft Paketleri
+    aspnetcore_identity_ef: "8.0.0"
+    aspnetcore_openapi: "8.0.0"
+    ef_core_sqlserver: "9.0.0"
+    ef_core_tools: "9.0.0"
+    
+    # Serilog
+    serilog_aspnetcore: "8.0.1"
+    serilog_sinks_mssqlserver: "6.5.0"
+    serilog_settings_configuration: "8.0.0"
+    
+    # Validation
+    fluentvalidation_aspnetcore: "11.3.0"
+    
+    # Mapping
+    automapper: "13.0.1"
+    
+    # Migration
+    fluentmigrator: "6.2.0"
+    fluentmigrator_runner: "6.2.0"
+    fluentmigrator_runner_sqlserver: "6.2.0"
+    
+    # Background Jobs
+    quartz: "3.8.0"
+    quartz_extensions_hosting: "3.8.0"
+    
+    # Cache & Queue
+    stackexchange_redis: "2.7.17"
+    
+    # Rate Limiting
+    aspnetcoreratelimit: "5.0.0"
+    
+    # API Versioning
+    asp_versioning_mvc: "8.1.0"
+    asp_versioning_mvc_apiexplorer: "8.1.0"
+    
+    # Test Data
+    bogus: "35.6.3"
+    
+    # Swagger
+    swashbuckle_aspnetcore: "7.1.0"
+    
+    # Cloud Storage (Opsiyonel)
+    azure_storage_blobs: "12.25.0"
+
+# =====================================================================================
+# DOCKER KONFİGÜRASYONU
+# =====================================================================================
+docker:
+  services:
+    mssql:
+      image: "mcr.microsoft.com/mssql/server:2022-latest"
+      ports:
+        - 1433:1433
+      environment:
+        ACCEPT_EULA: "Y"
+        SA_PASSWORD: "${MSSQL_SA_PASSWORD:-YourStrong!Passw0rd}"
+        MSSQL_PID: "Express"
+      volumes:
+        - mssql-data:/var/opt/mssql
+    
+    redis:
+      image: "redis:7-alpine"
+      ports:
+        - 6379:6379
+      volumes:
+        - redis-data:/data
+  
+  volumes:
+    - name: mssql-data
+    - name: redis-data
+
+# =====================================================================================
+# MİMARİ VE TASARIM KURALLARI
+# =====================================================================================
+architecture:
+  pattern: "Clean Architecture (Modified)"
+  layers:
+    - Data: "Entity tanımlamaları (POCO classes)"
+    - Dto: "Data Transfer Objects"
+    - Mssql: "DbContext ve Migrations"
+    - Mssql.Services: "Business Logic ve Data Access"
+    - Api: "Presentation Layer (Controllers, Hubs, Validators)"
+  
+  principles:
+    - "SOLID Principles"
+    - "DRY (Don't Repeat Yourself)"
+    - "Single Responsibility"
+    - "Dependency Injection"
+    - "Repository Pattern (IMssqlRepository<T>)"
+    - "Unit of Work Pattern (SaveChangesAsync)"
+    - "IoC Container (Maggsoft IoC)"
+
+# =====================================================================================
+# KOD STANDARTLARI
+# =====================================================================================
+
+# -----------------------------------------------------------------------------
+# ENTITY KURALLARI
+# -----------------------------------------------------------------------------
+entity_rules:
+  base_entity: "Maggsoft.Data.Mssql.BaseEntity"
+  primary_key_type: "Guid"
+  soft_delete: true
+  audit_fields:
+    - CreatedDate
+    - CreatorUserId
+    - UpdatedDate
+    - UpdatedByUserId
+    - UpdatedIP
+    - IsActive
+    - IsDeleted
+  navigation_properties: "virtual"
+  file_organization:
+    - "Her entity ayrı dosyada"
+    - "Enum'lar Enums/ klasöründe"
+    - "XML summary açıklamaları zorunlu"
+  
+  example: |
+    /// <summary>
+    /// Kullanıcı entity'si
+    /// </summary>
+    public class User : BaseEntity
+    {
+        public string FirstName { get; set; }
+        public string LastName { get; set; }
+        public string Email { get; set; }
+        public string PhoneNumber { get; set; }
+        
+        // Navigation Properties
+        public virtual ICollection<Order> Orders { get; set; }
+    }
+
+# -----------------------------------------------------------------------------
+# DTO KURALLARI
+# -----------------------------------------------------------------------------
+dto_rules:
+  file_organization:
+    - "Her DTO ayrı dosyada"
+    - "Klasörlere göre gruplandırma (User/, Product/, Order/)"
+    - "Tek property'li DTO'lar oluşturulmaz"
+  
+  naming_convention:
+    create: "Create{Entity}Dto"
+    update: "Update{Entity}Dto"
+    list: "{Entity}ListDto"
+    detail: "{Entity}Dto"
+    filter: "{Entity}FilterDto"
+    summary: "{Entity}SummaryDto"
+  
+  validation:
+    - "Data Annotations kullanılmaz"
+    - "FluentValidation ile API katmanında"
+    - "Çoklu dil desteği ile hata mesajları"
+  
+  example: |
+    /// <summary>
+    /// Kullanıcı oluşturma DTO'su
+    /// </summary>
+    public class CreateUserDto
+    {
+        public string FirstName { get; set; }
+        public string LastName { get; set; }
+        public string Email { get; set; }
+        public string PhoneNumber { get; set; }
+    }
+
+# -----------------------------------------------------------------------------
+# SERVICE KURALLARI
+# -----------------------------------------------------------------------------
+service_rules:
+  interface_inheritance: "IService (Maggsoft IoC için)"
+  class_inheritance: "BaseService (CurrentUserId, RemoteIp için)"
+  repository_usage: "IMssqlRepository<T> (CRUD işlemleri için)"
+  save_changes: "SaveChangesAsync() en son çağrılır"
+  
+  return_types:
+    list: "List<T> veya PagedList<T>"
+    single: "T? (nullable)"
+    create_update_delete: "Result<T> (Maggsoft.Core.Base)"
+  
+  file_organization:
+    - "Interface: Interfaces/{ServiceName}.cs"
+    - "Implementation: Services/{ServiceName}.cs"
+    - "Utilities: Utilities/{UtilityName}.cs"
+    - "Constants: Constants/{ConstantName}.cs"
+  
+  example: |
+    public interface IUserService : IService
+    {
+        Task<List<UserDto>> GetAllUsersAsync();
+        Task<UserDto?> GetUserByIdAsync(Guid id);
+        Task<Result<UserDto>> CreateUserAsync(CreateUserDto dto);
+    }
+    
+    public class UserService : BaseService, IService, IUserService
+    {
+        private readonly IMssqlRepository<User> _userRepository;
+        
+        public UserService(IMssqlRepository<User> userRepository)
+        {
+            _userRepository = userRepository;
+        }
+        
+        public async Task<Result<UserDto>> CreateUserAsync(CreateUserDto dto)
+        {
+            var user = new User
+            {
+                FirstName = dto.FirstName,
+                CreatedDate = DateTime.UtcNow,
+                CreatorUserId = CurrentUserId
+            };
+            
+            await _userRepository.InsertAsync(user);
+            await _userRepository.SaveChangesAsync();
+            
+            return Result<UserDto>.Success(MapToDto(user));
+        }
+    }
+
+# -----------------------------------------------------------------------------
+# CONTROLLER KURALLARI
+# -----------------------------------------------------------------------------
+controller_rules:
+  authorization:
+    - "[Authorize] - Kullanıcı endpoint'leri"
+    - "[Authorize(Roles = \"Admin\")] - Admin endpoint'leri"
+    - "[AllowAnonymous] - Public endpoint'ler"
+  
+  http_methods:
+    get: "Listeleme ve detay"
+    post: "Oluşturma"
+    put: "Güncelleme"
+    delete: "Soft delete"
+  
+  response_handling:
+    - "PagedList<T> -> Ok(result)"
+    - "T? -> NotFound() veya Ok(result)"
+    - "Result<T> -> CreatedAtAction() veya BadRequest()"
+  
+  parameter_security:
+    - "Admin olmayan endpoint'lerde userId parametresi KULLANILMAZ"
+    - "CurrentUserId otomatik kullanılır"
+    - "URL'de userId güvenlik açığı oluşturur"
+  
+  example: |
+    [ApiController]
+    [Route("api/[controller]")]
+    [ApiVersion("1.0")]
+    public class UsersController : ControllerBase
+    {
+        private readonly IUserService _userService;
+        
+        [HttpGet]
+        [Authorize]
+        public async Task<IActionResult> GetUsers()
+        {
+            var users = await _userService.GetAllUsersAsync();
+            return Ok(users);
+        }
+        
+        [HttpPost]
+        [Authorize]
+        public async Task<IActionResult> CreateUser(CreateUserDto dto)
+        {
+            var result = await _userService.CreateUserAsync(dto);
+            return result.IsSuccess 
+                ? CreatedAtAction(nameof(GetUserById), new { id = result.Data.Id }, result.Data)
+                : BadRequest(result);
+        }
+    }
+
+# -----------------------------------------------------------------------------
+# MIGRATION KURALLARI
+# -----------------------------------------------------------------------------
+migration_rules:
+  framework: "FluentMigrator"
+  attribute: "[MaggsoftMigration]"
+  format: "[MaggsoftMigration(\"yyyy/MM/dd HH:mm:ss\", \"Description\", \"version\")]"
+  auto_run: "app.AddUpMigrate() ile otomatik"
+  
+  example: |
+    [MaggsoftMigration("2025/01/01 12:00:00", "Create Users Table", "v01")]
+    public sealed class CreateUsersTable : Migration
+    {
+        public override void Up()
+        {
+            if (!Schema.Table("Users").Exists())
+            {
+                Create.Table("Users")
+                    .WithColumn("Id").AsGuid().PrimaryKey()
+                    .WithColumn("FirstName").AsString(100).NotNullable()
+                    .WithColumn("CreatedDate").AsDateTime().NotNullable();
+            }
+        }
+        
+        public override void Down()
+        {
+            // Reverse migration (genellikle boş bırakılır)
+        }
+    }
+
+# -----------------------------------------------------------------------------
+# VALIDATION KURALLARI
+# -----------------------------------------------------------------------------
+validation_rules:
+  framework: "FluentValidation"
+  location: "API katmanında (Validators/ klasöründe)"
+  localization: "Çoklu dil desteği ile"
+  registration: "builder.Services.AddFluentValidationAutoValidation()"
+  
+  example: |
+    public class CreateUserDtoValidator : AbstractValidator<CreateUserDto>
+    {
+        private readonly ILocalizationService _localizationService;
+        
+        public CreateUserDtoValidator(ILocalizationService localizationService)
+        {
+            _localizationService = localizationService;
+            
+            RuleFor(x => x.FirstName)
+                .NotEmpty().WithMessage(_localizationService.GetLocalizedString("Validation.FirstNameRequired"))
+                .MaximumLength(100);
+        }
+    }
+
+# -----------------------------------------------------------------------------
+# AUTOMAPPER KURALLARI
+# -----------------------------------------------------------------------------
+automapping_rules:
+  location: "Mssql.Services/Mapping/MappingProfile.cs"
+  registration: "builder.Services.AddAutoMapperConfig()"
+  usage: "ProjectTo<T>() ile LINQ sorgularında"
+  
+  example: |
+    public class MappingProfile : Profile
+    {
+        public MappingProfile()
+        {
+            CreateMap<User, UserDto>();
+            CreateMap<CreateUserDto, User>();
+            CreateMap<UpdateUserDto, User>();
+        }
+    }
+
+# -----------------------------------------------------------------------------
+# PAGINATION KURALLARI
+# -----------------------------------------------------------------------------
+pagination_rules:
+  method: "ToPagedListAsync()"
+  parameters: "pageNumber, pageSize, filters"
+  implementation: "Database sorgusunda ProjectTo<T>().ToPagedListAsync()"
+  return_type: "PagedList<T>"
+  
+  example: |
+    public async Task<PagedList<UserDto>> GetUsersAsync(int pageNumber, int pageSize)
+    {
+        var query = _userRepository.GetQueryable();
+        return await query
+            .ProjectTo<UserDto>(_mapper.ConfigurationProvider)
+            .ToPagedListAsync(pageNumber - 1, pageSize, new List<Filter>());
+    }
+
+# -----------------------------------------------------------------------------
+# SOFT DELETE KURALLARI
+# -----------------------------------------------------------------------------
+soft_delete_rules:
+  principle: "Hiçbir veri veritabanından fiziksel olarak silinmez"
+  flags:
+    - "IsActive = false"
+    - "IsDeleted = true"
+  method: "entity.SoftDelete()"
+  audit: "UpdatedDate ve UpdatedByUserId güncellenir"
+  
+  example: |
+    public async Task<Result<bool>> DeleteUserAsync(Guid id)
+    {
+        var user = await _userRepository.GetByIdAsync(id);
+        if (user == null) return Result<bool>.Failure("User not found");
+        
+        user.SoftDelete();
+        user.UpdatedDate = DateTime.UtcNow;
+        user.UpdatedByUserId = CurrentUserId;
+        
+        await _userRepository.SaveChangesAsync();
+        return Result<bool>.Success(true);
+    }
+
+# -----------------------------------------------------------------------------
+# LOCALIZATION (ÇOKLU DİL) KURALLARI
+# -----------------------------------------------------------------------------
+localization_rules:
+  entities:
+    - Language: "Dil tanımlamaları (tr-TR, en-US, de-DE)"
+    - LocaleStringResource: "Genel çeviriler (Common.Save, User.FirstName)"
+    - LocalizedProperty: "Entity'lere özel çeviriler"
+  
+  key_format: "Group.Key (örn: Common.Save, User.FirstName)"
+  default_language: "tr-TR"
+  storage: "Database (cache ile optimize edilir)"
+  
+  usage_areas:
+    - API response mesajları
+    - Validation hata mesajları
+    - Email ve SMS şablonları
+    - Enum görüntü isimleri
+  
+  implementation: |
+    - ILocalizationService servisi kullanılır
+    - HTTP Header: X-Language (tr, en, de)
+    - Cache: LanguageMapping ve LocalizationCache
+    - Fallback: Çeviri bulunamazsa default dil kullanılır
+
+# -----------------------------------------------------------------------------
+# LOGLAMA KURALLARI
+# -----------------------------------------------------------------------------
+logging_rules:
+  framework: "Serilog"
+  sinks:
+    - Console: "Development ortamı için"
+    - MSSqlServer: "Production için database loglama"
+  
+  log_levels:
+    - Information: "Genel bilgiler"
+    - Warning: "Uyarılar"
+    - Error: "Hatalar"
+    - Fatal: "Kritik hatalar"
+  
+  enrichment:
+    - UserId: "Giriş yapmış kullanıcı"
+    - IPAddress: "İstek IP adresi"
+  
+  configuration: |
+    - Serilog.AspNetCore
+    - Serilog.Sinks.MSSqlServer
+    - Serilog.Settings.Configuration
+    - Environment variable placeholder resolve edilir
+
+# -----------------------------------------------------------------------------
+# BACKGROUND JOBS KURALLARI
+# -----------------------------------------------------------------------------
+background_jobs_rules:
+  framework: "Quartz.NET"
+  storage: "In-Memory (geliştirme) veya Database (production)"
+  job_types:
+    - Scheduled: "Belirli zamanlarda çalışır (Cron)"
+    - Triggered: "Event bazlı tetiklenir"
+    - One-Time: "Tek seferlik çalışır"
+  
+  implementation:
+    - Job class: "IJob interface'inden türetilir"
+    - Registration: "builder.Services.AddQuartz()"
+    - Execution: "AddQuartzHostedService()"
+  
+  example: |
+    public class CleanupJob : IJob
+    {
+        public async Task Execute(IJobExecutionContext context)
+        {
+            // Job logic
+        }
+    }
+    
+    // Registration
+    q.AddJob<CleanupJob>(opts => opts.WithIdentity("CleanupJob").StoreDurably());
+    q.AddTrigger(opts => opts
+        .ForJob("CleanupJob")
+        .WithCronSchedule("0 0 2 ? * MON")); // Her Pazartesi 02:00
+
+# -----------------------------------------------------------------------------
+# CACHE KURALLARI
+# -----------------------------------------------------------------------------
+cache_rules:
+  framework: "Maggsoft.Cache"
+  providers:
+    - MemoryCache: "In-Memory caching"
+    - Redis: "Distributed caching (opsiyonel)"
+  
+  usage:
+    - Localization strings
+    - Static data (şehirler, parametreler)
+    - Frequently accessed data
+  
+  configuration: |
+    builder.Services.AddMaggsoftDistributedMemoryCache(typeof(IService));
+
+# -----------------------------------------------------------------------------
+# RATE LIMITING KURALLARI
+# -----------------------------------------------------------------------------
+rate_limiting_rules:
+  framework: "AspNetCoreRateLimit"
+  type: "IP-based"
+  configuration:
+    endpoint_specific: "Her endpoint için özel limitler"
+    whitelist: "Belirli IP'ler sınırsız erişim"
+    production_vs_development: "Farklı ortamlar için farklı limitler"
+  
+  critical_endpoints:
+    - Login: "5 istek/dakika"
+    - Register: "3 istek/5 dakika"
+    - SMS: "3 istek/dakika"
+    - API calls: "100 istek/dakika"
+  
+  response: "HTTP 429 - Too Many Requests"
+
+# -----------------------------------------------------------------------------
+# SECURITY (GÜVENLİK) KURALLARI
+# -----------------------------------------------------------------------------
+security_rules:
+  authentication: "JWT Bearer Token (Microsoft.AspNetCore.Identity)"
+  authorization: "Role-based (Admin, User)"
+  
+  password_policy:
+    - RequireDigit: true
+    - RequireLowercase: true
+    - RequireUppercase: true
+    - RequireNonAlphanumeric: true
+    - RequiredLength: 8
+  
+  security_headers:
+    - X-Content-Type-Options: "nosniff"
+    - X-Frame-Options: "DENY"
+    - X-XSS-Protection: "1; mode=block"
+    - Referrer-Policy: "strict-origin-when-cross-origin"
+    - Content-Security-Policy: "Strict CSP rules"
+    - HSTS: "Production'da HTTPS zorunlu"
+  
+  environment_variables:
+    - DATABASE_CONNECTION_STRING: "Database bağlantı"
+    - JWT_SECRET_KEY: "JWT şifreleme"
+    - AZURE_STORAGE_CONNECTION_STRING: "Cloud storage"
+    - REDIS_CONNECTION_STRING: "Cache bağlantı"
+  
+  best_practices:
+    - Sensitive data environment variable'da
+    - Connection string'ler şifrelenmeli
+    - Admin endpoint'leri role-based korumalı
+    - Rate limiting aktif
+    - CORS policy dikkatli yapılandırılmalı
+
+# -----------------------------------------------------------------------------
+# SIGNALR KURALLARI
+# -----------------------------------------------------------------------------
+signalr_rules:
+  usage: "Real-time communication için"
+  authentication: "JWT token ile WebSocket'te"
+  hub_organization: "Her feature için ayrı Hub (AuctionHub, ChatHub)"
+  
+  configuration:
+    - ClientTimeoutInterval: "Minimum 60 saniye"
+    - KeepAliveInterval: "15 saniye"
+    - Connection mapping: "OnConnected/OnDisconnected"
+  
+  example: |
+    public class AuctionHub : Hub
+    {
+        public override async Task OnConnectedAsync()
+        {
+            var userId = Context.User?.FindFirst(ClaimTypes.NameIdentifier)?.Value;
+            await Groups.AddToGroupAsync(Context.ConnectionId, $"User_{userId}");
+        }
+    }
+
+# -----------------------------------------------------------------------------
+# PERFORMANCE OPTIMIZATION KURALLARI
+# -----------------------------------------------------------------------------
+performance_rules:
+  database:
+    - AsNoTracking: "Global olarak aktif"
+    - Indexes: "Sık kullanılan kolonlar için"
+    - ProjectTo: "LINQ'da DTO mapping için"
+    - SplitQuery: "N+1 problemlerini önler"
+  
+  caching:
+    - Static data cache'lenir
+    - Localization cache'lenir
+    - TTL (Time-To-Live) dikkatli ayarlanır
+  
+  async_await:
+    - Tüm I/O operasyonlar async
+    - Task.WhenAll ile paralel çalışma
+  
+  pagination:
+    - Büyük listeler sayfalanır
+    - PagedList<T> kullanılır
+
+# =====================================================================================
+# PROGRAM.CS KONFİGÜRASYONU ŞABLONUPhttps://chatgpt.com/c/678c7d9f-3f48-8001-87a8-24e4d265a74c
+# =====================================================================================
+program_cs_template: |
+  // 1. Builder oluşturma
+  var builder = WebApplication.CreateBuilder(args);
+  
+  // 2. Environment variable resolver (güvenlik)
+  var connectionString = EnvironmentHelper.ResolveEnvironmentVariable(
+      builder.Configuration.GetConnectionString("DefaultConnection") ?? "");
+  
+  // 3. Serilog konfigürasyonu
+  Log.Logger = new LoggerConfiguration()
+      .MinimumLevel.Information()
+      .WriteTo.Console()
+      .WriteTo.MSSqlServer(connectionString, ...)
+      .CreateLogger();
+  
+  // 4. Services registration
+  builder.Services.AddControllers();
+  builder.Services.AddApiVersioning(...);
+  builder.Services.AddSwaggerGen(...);
+  
+  // 5. Database ve Migration
+  builder.Services
+      .AddMssqlConfig<DbContext>(connectionString)
+      .AddFluentMigratorConfig(connectionString);
+  
+  // 6. Identity
+  builder.Services.AddIdentity<User, Role>(...);
+  
+  // 7. JWT Authentication
+  builder.Services.AddAuthentication(JwtBearerDefaults.AuthenticationScheme)
+      .AddJwtBearer(...);
+  
+  // 8. AutoMapper
+  builder.Services.AddAutoMapperConfig(...);
+  
+  // 9. FluentValidation
+  builder.Services.AddFluentValidationAutoValidation();
+  
+  // 10. Repository
+  builder.Services.AddScoped(typeof(IMssqlRepository<>), typeof(Repository<>));
+  
+  // 11. Redis (opsiyonel)
+  builder.Services.AddSingleton<IConnectionMultiplexer>(...);
+  
+  // 12. Cache
+  builder.Services.AddMaggsoftDistributedMemoryCache(typeof(IService));
+  
+  // 13. SignalR (gerekliyse)
+  builder.Services.AddSignalR();
+  
+  // 14. Rate Limiting
+  builder.Services.Configure<IpRateLimitOptions>(...);
+  builder.Services.AddDistributedRateLimiting();
+  
+  // 15. Maggsoft IoC
+  builder.Services.RegisterAll<IService>();
+  
+  // 16. Quartz.NET
+  builder.Services.AddQuartz(...);
+  builder.Services.AddQuartzHostedService(...);
+  
+  // 17. Middleware'ler
+  builder.Services.AddExceptionHandler<ExceptionMiddleware>();
+  builder.Services.AddGlobalResponseMiddlewareWithOptions(...);
+  builder.Services.AddIPFilter(...);
+  
+  // 18. CORS
+  builder.Services.AddCors(...);
+  
+  var app = builder.Build();
+  
+  // 19. Middleware pipeline
+  app.UseForwardedHeaders();
+  app.UseSwagger();
+  app.UseSwaggerUI();
+  app.UseCors("AllowAll");
+  app.UseAuthentication();
+  app.UseAuthorization();
+  app.UseIpRateLimiting();
+  
+  // 20. Migration çalıştır
+  app.AddUpMigrate();
+  
+  // 21. Seed data
+  if (seedDataEnabled)
+  {
+      using var scope = app.Services.CreateScope();
+      var seedDataService = scope.ServiceProvider.GetRequiredService<SeedDataService>();
+      await seedDataService.SeedAllDataAsync();
+  }
+  
+  // 22. Controllers ve Hub'lar
+  app.MapControllers();
+  app.MapHub<AuctionHub>("/hubs/auction");
+  
+  app.Run();
+
+# =====================================================================================
+# APPSETTINGS.JSON ŞABLONUhttps://chatgpt.com/c/678c7d9f-3f48-8001-87a8-24e4d265a74c
+# =====================================================================================
+appsettings_template: |
+  {
+    "ConnectionStrings": {
+      "DefaultConnection": "${DATABASE_CONNECTION_STRING}"
+    },
+    "JwtSettings": {
+      "SecretKey": "${JWT_SECRET_KEY}",
+      "Issuer": "YourAppIssuer",
+      "Audience": "YourAppAudience",
+      "AccessTokenExpirationMinutes": 60,
+      "RefreshTokenExpirationDays": 7
+    },
+    "Serilog": {
+      "MinimumLevel": {
+        "Default": "Information",
+        "Override": {
+          "Microsoft": "Warning",
+          "Microsoft.AspNetCore": "Warning"
+        }
+      }
+    },
+    "Redis": {
+      "ConnectionString": "${REDIS_CONNECTION_STRING:-localhost:6379}",
+      "ConnectTimeout": "30000",
+      "ConnectRetry": "5"
+    },
+    "AzureStorage": {
+      "ConnectionString": "${AZURE_STORAGE_CONNECTION_STRING}",
+      "ContainerName": "images",
+      "BlobServiceUrl": "https://youraccount.blob.core.windows.net/"
+    },
+    "IpRateLimiting": {
+      "EnableEndpointRateLimiting": true,
+      "StackBlockedRequests": false,
+      "RealIpHeader": "X-Real-IP",
+      "ClientIdHeader": "X-ClientId",
+      "HttpStatusCode": 429
+    },
+    "SeedData": {
+      "Enabled": true
+    }
+  }
+
+# =====================================================================================
+# PROJE KLASÖR YAPISI
+# =====================================================================================
+project_structure: |
+  YourProject/
+  ├── src/
+  │   ├── Libraries/
+  │   │   ├── Data/
+  │   │   │   └── YourProject.Data.Mssql/
+  │   │   │       ├── Entities/
+  │   │   │       │   ├── User.cs
+  │   │   │       │   ├── Product.cs
+  │   │   │       │   └── Order.cs
+  │   │   │       ├── Enums/
+  │   │   │       │   ├── OrderStatus.cs
+  │   │   │       │   └── UserRole.cs
+  │   │   │       └── BaseEntity.cs
+  │   │   ├── Dto/
+  │   │   │   └── YourProject.Dto.Mssql/
+  │   │   │       ├── User/
+  │   │   │       │   ├── CreateUserDto.cs
+  │   │   │       │   ├── UpdateUserDto.cs
+  │   │   │       │   ├── UserDto.cs
+  │   │   │       │   └── UserListDto.cs
+  │   │   │       └── Product/
+  │   │   ├── Mssql/
+  │   │   │   └── YourProject.Mssql/
+  │   │   │       ├── Migrations/
+  │   │   │       │   ├── 001_InitialCreate.cs
+  │   │   │       │   └── 002_AddUserAvatar.cs
+  │   │   │       └── YourProjectDbContext.cs
+  │   │   └── Mssql.Services/
+  │   │       └── YourProject.Mssql.Services/
+  │   │           ├── Interfaces/
+  │   │           │   ├── IUserService.cs
+  │   │           │   └── IProductService.cs
+  │   │           ├── Services/
+  │   │           │   ├── UserService.cs
+  │   │           │   └── ProductService.cs
+  │   │           ├── Mapping/
+  │   │           │   └── MappingProfile.cs
+  │   │           ├── Constants/
+  │   │           ├── Utilities/
+  │   │           ├── JobSystem/
+  │   │           └── BackgroundServices/
+  │   └── Presentation/
+  │       └── Api/
+  │           └── YourProject.Api/
+  │               ├── Controllers/
+  │               │   ├── UsersController.cs
+  │               │   └── ProductsController.cs
+  │               ├── Hubs/
+  │               │   └── NotificationHub.cs
+  │               ├── Validators/
+  │               │   └── CreateUserDtoValidator.cs
+  │               ├── Services/
+  │               │   ├── JwtService.cs
+  │               │   └── SeedDataService.cs
+  │               ├── Middleware/
+  │               ├── Models/
+  │               ├── Utilities/
+  │               ├── Program.cs
+  │               └── appsettings.json
+  ├── docs/
+  ├── tests/
+  ├── Directory.Packages.props
+  ├── docker-compose.yml
+  ├── .cursorrules
+  ├── README.md
+  └── YourProject.sln
+
+# =====================================================================================
+# GELİŞTİRME SÜRECİ KURALLARI
+# =====================================================================================
+development_process:
+  before_starting:
+    - "README.md'yi oku (proje genel bilgileri)"
+    - ".cursorrules'ı oku (geliştirme kuralları)"
+    - "pwd.md'yi oku (yapılacaklar listesi)"
+  
+  after_completing:
+    - "pwd.md'deki 'TAMAMLANAN GÖREVLER' bölümünü güncelle"
+    - "Yeni görev tespit edilirse 'YAPILACAK GÖREVLER' bölümüne ekle"
+    - "Her değişiklik sonrası pwd.md güncelle"
+  
+  git_workflow:
+    - "Feature branch'lerde çalış (feature/user-management)"
+    - "Commit mesajları açıklayıcı olmalı (türkçe veya ingilizce)"
+    - "Pull request oluştur ve review bekle"
+    - "Main/master branch'e direkt push yapma"
+
+# =====================================================================================
+# TEST KURALLARI
+# =====================================================================================
+testing_rules:
+  unit_tests:
+    - "xUnit kullanılır"
+    - "Moq ile mocking"
+    - "Service katmanı test edilir"
+    - "Validator'lar test edilir"
+  
+  integration_tests:
+    - "WebApplicationFactory kullanılır"
+    - "TestContainers ile database"
+    - "API endpoint'leri test edilir"
+  
+  performance_tests:
+    - "k6 ile load testing"
+    - "Stress test senaryoları"
+    - "Real-time WebSocket testleri"
+
+# =====================================================================================
+# DEPLOYMENT KURALLARI
+# =====================================================================================
+deployment_rules:
+  environments:
+    development:
+      - "appsettings.Development.json"
+      - "Seed data aktif"
+      - "Swagger aktif"
+      - "Detailed error messages"
+    
+    staging:
+      - "Production benzeri"
+      - "Test amaçlı"
+      - "Swagger aktif (restricted)"
+    
+    production:
+      - "appsettings.Production.json"
+      - "Seed data devre dışı"
+      - "Swagger kapalı veya restricted"
+      - "HTTPS zorunlu"
+      - "Security headers aktif"
+      - "Rate limiting sıkı"
+  
+  environment_variables:
+    required:
+      - DATABASE_CONNECTION_STRING
+      - JWT_SECRET_KEY
+    optional:
+      - AZURE_STORAGE_CONNECTION_STRING
+      - REDIS_CONNECTION_STRING
+      - SMS_PROVIDER_API_KEY
+  
+  monitoring:
+    - "Application Insights (Azure)"
+    - "Serilog database logs"
+    - "Health check endpoint (/health)"
+    - "Keep-alive service (Azure sleep mode önleme)"
+
+# =====================================================================================
+# TROUBLESHOOTING (SORUN GİDERME)
+# =====================================================================================
+common_issues:
+  migration_fails:
+    - "Database bağlantı kontrol et"
+    - "Migration sıralaması doğru mu?"
+    - "MaggsoftMigration attribute'u var mı?"
+  
+  authentication_fails:
+    - "JWT secret key doğru mu?"
+    - "Token expiration süresi geçmiş mi?"
+    - "User role'leri doğru atanmış mı?"
+  
+  performance_issues:
+    - "N+1 query problemi var mı? (SplitQuery kullan)"
+    - "Index'ler tanımlı mı?"
+    - "AsNoTracking kullanılıyor mu?"
+    - "Pagination uygulanmış mı?"
+  
+  signalr_issues:
+    - "JWT token WebSocket'te iletiliyor mu?"
+    - "CORS konfigürasyonu doğru mu?"
+    - "Connection timeout yeterli mi?"
+
+# =====================================================================================
+# EK KAYNAKLAR
+# =====================================================================================
+additional_resources:
+  documentation:
+    - "https://docs.microsoft.com/aspnet/core"
+    - "https://docs.fluentvalidation.net"
+    - "https://www.quartz-scheduler.net"
+    - "https://automapper.org"
+  
+  useful_tools:
+    - "Postman / Insomnia (API testing)"
+    - "Azure Data Studio (SQL Server)"
+    - "Redis Commander (Redis GUI)"
+    - "k6 (Load testing)"
+    - "Serilog Analyzer (Log analysis)"
+
+# =====================================================================================
+# NOTLAR
+# =====================================================================================
+notes: |
+  - Bu şablon Maggsoft Framework tabanlı projeler içindir
+  - Her proje için özelleştirilebilir
+  - Teknoloji stack projeye göre değiştirilebilir
+  - Clean Architecture prensipleri uygulanır
+  - SOLID prensipleri takip edilir
+  - Security first yaklaşımı benimsenir
+  - Performance optimization sürekli göz önünde bulundurulur
+  - Çoklu dil desteği standart olarak eklenir
+  - Background jobs ve real-time features opsiyoneldir
+
+# =====================================================================================
+# VERSİYON BİLGİSİ
+# =====================================================================================
+template_version: "1.0.0"
+last_updated: "2025-01-19"
+author: "Maggsoft Framework Development Team"
+
