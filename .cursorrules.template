@@ -370,6 +370,9 @@ service_rules:
   class_inheritance: "BaseService (CurrentUserId, RemoteIp için)"
   repository_usage: "IMssqlRepository<T> (CRUD işlemleri için)"
   save_changes: "SaveChangesAsync() en son çağrılır"
+  update_pattern: |
+    ⚠️ ÖNEMLİ: Update/Delete işlemlerinde _repository.Update(entity) çağrısı ZORUNLU
+    Global AsNoTracking aktif olduğu için Update() çağrılmazsa değişiklikler kaydedilmez!
   
   return_types:
     list: "List<T> veya PagedList<T>"
@@ -409,6 +412,22 @@ service_rules:
             };
             
             await _userRepository.InsertAsync(user);
+            await _userRepository.SaveChangesAsync();
+            
+            return Result<UserDto>.Success(MapToDto(user));
+        }
+        
+        public async Task<Result<UserDto>> UpdateUserAsync(Guid id, UpdateUserDto dto)
+        {
+            var user = await _userRepository.GetByIdAsync(id);
+            if (user == null) return Result<UserDto>.Failure("User not found");
+            
+            user.FirstName = dto.FirstName;
+            user.UpdatedDate = DateTime.UtcNow;
+            user.UpdatedByUserId = CurrentUserId;
+            user.UpdatedIP = RemoteIp;
+            
+            _userRepository.Update(user);  // Entity tracking için gerekli
             await _userRepository.SaveChangesAsync();
             
             return Result<UserDto>.Success(MapToDto(user));
@@ -468,6 +487,84 @@ controller_rules:
     }
 
 # -----------------------------------------------------------------------------
+# SERVICE SADELEŞTİRME VE BEST PRACTICES
+# -----------------------------------------------------------------------------
+service_simplification_rules:
+  principles:
+    - "YAGNI (You Aren't Gonna Need It) - Gereksiz kod yazma"
+    - "Keep It Simple - Basit ve anlaşılır tutun"
+    - "Single Responsibility - Her metod tek bir iş yapsın"
+  
+  avoid:
+    unnecessary_filter_methods: |
+      - Gereksiz filter metodları yazılmaz
+      - Filter DTO'ları basit tutulur
+      - Karmaşık filter yerine query parametreleri kullanılır
+    
+    overengineering: |
+      - Her durum için ayrı metod yazılmaz
+      - Generic metodlar tercih edilir
+      - Code duplication önlenir
+  
+  prefer:
+    essential_crud: |
+      - GetAll / GetPaged
+      - GetById
+      - Create
+      - Update
+      - Delete (soft delete)
+    
+    simple_parameters: |
+      - DTO yerine basit parametreler (string, int, Guid)
+      - Query parametreleri ile filtreleme
+      - Optional parametreler için nullable types
+    
+    focused_interfaces: |
+      - Interface'lerde sadece gerekli metodlar
+      - Kullanılmayan metodlar tanımlanmaz
+      - Interface segregation principle
+  
+  example: |
+    // ❌ YANLIŞ - Gereksiz karmaşıklık
+    public interface IProductService
+    {
+        Task<List<ProductDto>> GetProductsByNameAsync(string name);
+        Task<List<ProductDto>> GetProductsByCategoryAsync(Guid categoryId);
+        Task<List<ProductDto>> GetProductsByPriceRangeAsync(decimal min, decimal max);
+        Task<List<ProductDto>> GetProductsByNameAndCategoryAsync(string name, Guid categoryId);
+        // ... 20 farklı filter metodu
+    }
+    
+    // ✅ DOĞRU - Basit ve esnek
+    public interface IProductService
+    {
+        Task<PagedList<ProductDto>> GetProductsAsync(int pageNumber, int pageSize, 
+            string? searchTerm = null, Guid? categoryId = null, 
+            decimal? minPrice = null, decimal? maxPrice = null);
+        Task<ProductDto?> GetProductByIdAsync(Guid id);
+        Task<Result<ProductDto>> CreateProductAsync(CreateProductDto dto);
+        Task<Result<ProductDto>> UpdateProductAsync(Guid id, UpdateProductDto dto);
+        Task<Result<bool>> DeleteProductAsync(Guid id);
+    }
+    
+    // Implementation örneği
+    public async Task<Result<ProductDto>> UpdateProductAsync(Guid id, UpdateProductDto dto)
+    {
+        var product = await _repository.GetByIdAsync(id);
+        if (product == null) return Result<ProductDto>.Failure("Product not found");
+        
+        product.Name = dto.Name;
+        product.Price = dto.Price;
+        product.UpdatedDate = DateTime.UtcNow;
+        product.UpdatedByUserId = CurrentUserId;
+        
+        _repository.Update(product);  // ⚠️ ZORUNLU - AsNoTracking aktif
+        await _repository.SaveChangesAsync();
+        
+        return Result<ProductDto>.Success(_mapper.Map<ProductDto>(product));
+    }
+
+# -----------------------------------------------------------------------------
 # MIGRATION KURALLARI
 # -----------------------------------------------------------------------------
 migration_rules:
@@ -475,6 +572,16 @@ migration_rules:
   attribute: "[MaggsoftMigration]"
   format: "[MaggsoftMigration(\"yyyy/MM/dd HH:mm:ss\", \"Description\", \"version\")]"
   auto_run: "app.AddUpMigrate() ile otomatik"
+  location: "Mssql/Migrations/ klasöründe"
+  naming: "Açıklayıcı isimler (001_CreateUsersTable, 002_AddUserAvatar)"
+  
+  best_practices:
+    - "Her migration ayrı dosyada"
+    - "Migration sıralaması önemli (tarih formatı)"
+    - "Down() metodu genellikle boş bırakılır"
+    - "Tablo ve kolon varlığı kontrol edilir"
+    - "Foreign key'ler dikkatli eklenir"
+    - "Index'ler migration'da oluşturulur"
   
   example: |
     [MaggsoftMigration("2025/01/01 12:00:00", "Create Users Table", "v01")]
@@ -487,13 +594,29 @@ migration_rules:
                 Create.Table("Users")
                     .WithColumn("Id").AsGuid().PrimaryKey()
                     .WithColumn("FirstName").AsString(100).NotNullable()
-                    .WithColumn("CreatedDate").AsDateTime().NotNullable();
+                    .WithColumn("LastName").AsString(100).NotNullable()
+                    .WithColumn("Email").AsString(256).NotNullable()
+                    .WithColumn("PhoneNumber").AsString(20).Nullable()
+                    // Audit fields
+                    .WithColumn("IsActive").AsBoolean().NotNullable().WithDefaultValue(true)
+                    .WithColumn("IsDeleted").AsBoolean().NotNullable().WithDefaultValue(false)
+                    .WithColumn("CreatedDate").AsDateTime().NotNullable()
+                    .WithColumn("CreatorUserId").AsGuid().Nullable()
+                    .WithColumn("UpdatedDate").AsDateTime().Nullable()
+                    .WithColumn("UpdatedByUserId").AsGuid().Nullable()
+                    .WithColumn("UpdatedIP").AsString(45).Nullable();
+                
+                // Index'ler
+                Create.Index("IX_Users_Email")
+                    .OnTable("Users")
+                    .OnColumn("Email")
+                    .Ascending();
             }
         }
         
         public override void Down()
         {
-            // Reverse migration (genellikle boş bırakılır)
+            // Rollback genellikle kullanılmaz
         }
     }
 
@@ -559,6 +682,62 @@ pagination_rules:
     }
 
 # -----------------------------------------------------------------------------
+# FİLTRELEME VE NULL SAFETY KURALLARI
+# -----------------------------------------------------------------------------
+filtering_rules:
+  null_safety:
+    principle: "Tüm filtreleme işlemlerinde null reference kontrolü zorunludur"
+    
+    navigation_properties: |
+      - Navigation property'ler null olabilir
+      - Null-safe operatörler kullanılmalıdır
+      - Null kontrolü yapmadan property'ye erişilmez
+    
+    string_operations: |
+      - string.IsNullOrEmpty() kontrolü
+      - string.IsNullOrWhiteSpace() kontrolü
+      - ToLower() / ToUpper() ile case-insensitive arama
+  
+  best_practices:
+    linq_queries: |
+      - Where() clause'da null kontrolleri
+      - Navigation property erişiminde ?. operatörü
+      - Composite filtrelerde logical AND/OR dikkatli kullanımı
+    
+    search_operations: |
+      - Contains() için null kontrolü
+      - StartsWith() / EndsWith() için null kontrolü
+      - Trim() işlemlerinde null kontrolü
+  
+  examples:
+    wrong: |
+      // ❌ YANLIŞ - Null reference exception riski
+      var query = _repository.GetQueryable()
+          .Where(a => a.Property.District.Name.Contains(searchTerm));
+    
+    correct: |
+      // ✅ DOĞRU - Null-safe filtreleme
+      var query = _repository.GetQueryable()
+          .Where(a => a.Property != null && 
+                     a.Property.District != null && 
+                     a.Property.District.Name != null &&
+                     a.Property.District.Name.Contains(searchTerm));
+      
+      // ✅ DOĞRU - Null-conditional operatör
+      var query = _repository.GetQueryable()
+          .Where(a => a.Property?.District?.Name != null &&
+                     a.Property.District.Name.Contains(searchTerm));
+    
+    string_filtering: |
+      // ✅ DOĞRU - String filtreleme
+      if (!string.IsNullOrEmpty(searchTerm))
+      {
+          query = query.Where(a => 
+              a.Name.ToLower().Contains(searchTerm.ToLower()) ||
+              a.Description.ToLower().Contains(searchTerm.ToLower()));
+      }
+
+# -----------------------------------------------------------------------------
 # SOFT DELETE KURALLARI
 # -----------------------------------------------------------------------------
 soft_delete_rules:
@@ -569,6 +748,16 @@ soft_delete_rules:
   method: "entity.SoftDelete()"
   audit: "UpdatedDate ve UpdatedByUserId güncellenir"
   
+  global_filter: |
+    DbContext'te global query filter:
+    modelBuilder.Entity<BaseEntity>()
+        .HasQueryFilter(e => e.IsActive && !e.IsDeleted);
+  
+  restore_functionality: |
+    - BaseEntity'de Restore() metodu
+    - Admin panelinde silinen kayıtları görüntüleme
+    - Silinen kayıtları geri yükleme özelliği
+  
   example: |
     public async Task<Result<bool>> DeleteUserAsync(Guid id)
     {
@@ -578,10 +767,156 @@ soft_delete_rules:
         user.SoftDelete();
         user.UpdatedDate = DateTime.UtcNow;
         user.UpdatedByUserId = CurrentUserId;
+        user.UpdatedIP = RemoteIp;
         
+        _userRepository.Update(user);  // Entity tracking için gerekli
         await _userRepository.SaveChangesAsync();
+        
+        _logger.LogInformation("User {UserId} soft deleted by {DeletedBy}", 
+            id, CurrentUserId);
+        
         return Result<bool>.Success(true);
     }
+    
+    public async Task<Result<bool>> RestoreUserAsync(Guid id)
+    {
+        var user = await _userRepository.GetByIdAsync(id, ignoreQueryFilters: true);
+        if (user == null) return Result<bool>.Failure("User not found");
+        
+        user.Restore();
+        user.UpdatedDate = DateTime.UtcNow;
+        user.UpdatedByUserId = CurrentUserId;
+        
+        _userRepository.Update(user);  // Entity tracking için gerekli
+        await _userRepository.SaveChangesAsync();
+        
+        return Result<bool>.Success(true);
+    }
+
+# -----------------------------------------------------------------------------
+# AUDIT BİLGİLERİ VE TRACKING KURALLARI
+# -----------------------------------------------------------------------------
+audit_tracking_rules:
+  principle: "Tüm veri değişiklikleri audit bilgileri ile takip edilir"
+  
+  audit_fields:
+    create: |
+      - CreatedDate: DateTime.UtcNow
+      - CreatorUserId: CurrentUserId (BaseService'ten)
+    
+    update: |
+      - UpdatedDate: DateTime.UtcNow
+      - UpdatedByUserId: CurrentUserId (BaseService'ten)
+      - UpdatedIP: RemoteIp (BaseService'ten)
+    
+    delete: |
+      - SoftDelete() metodu çağrılır
+      - UpdatedDate: DateTime.UtcNow
+      - UpdatedByUserId: CurrentUserId
+      - IsActive: false
+      - IsDeleted: true
+  
+  base_entity: |
+    public abstract class BaseEntity : Maggsoft.Data.Mssql.BaseEntity
+    {
+        public Guid Id { get; set; }
+        public DateTime CreatedDate { get; set; }
+        public Guid? CreatorUserId { get; set; }
+        public DateTime? UpdatedDate { get; set; }
+        public Guid? UpdatedByUserId { get; set; }
+        public string? UpdatedIP { get; set; }
+        public bool IsActive { get; set; }
+        public bool IsDeleted { get; set; }
+        
+        public void SoftDelete()
+        {
+            IsActive = false;
+            IsDeleted = true;
+        }
+        
+        public void Restore()
+        {
+            IsActive = true;
+            IsDeleted = false;
+        }
+    }
+  
+  base_service_usage: |
+    public class ProductService : BaseService, IService, IProductService
+    {
+        // CurrentUserId: Giriş yapmış kullanıcının ID'si (Guid?)
+        // RemoteIp: İsteği yapan IP adresi (string?)
+        
+        public async Task<Result<ProductDto>> CreateProductAsync(CreateProductDto dto)
+        {
+            var product = new Product
+            {
+                Name = dto.Name,
+                CreatedDate = DateTime.UtcNow,
+                CreatorUserId = CurrentUserId  // BaseService'ten
+            };
+            
+            await _repository.InsertAsync(product);
+            await _repository.SaveChangesAsync();
+            
+            return Result<ProductDto>.Success(_mapper.Map<ProductDto>(product));
+        }
+        
+        public async Task<Result<ProductDto>> UpdateProductAsync(Guid id, UpdateProductDto dto)
+        {
+            var product = await _repository.GetByIdAsync(id);
+            if (product == null) return Result<ProductDto>.Failure("Product not found");
+            
+            product.Name = dto.Name;
+            product.UpdatedDate = DateTime.UtcNow;
+            product.UpdatedByUserId = CurrentUserId;  // BaseService'ten
+            product.UpdatedIP = RemoteIp;  // BaseService'ten
+            
+            _repository.Update(product);  // Entity tracking için gerekli
+            await _repository.SaveChangesAsync();
+            
+            return Result<ProductDto>.Success(_mapper.Map<ProductDto>(product));
+        }
+    }
+  
+  dto_requirements: |
+    - DTO'larda audit property'leri bulunmalı (okunabilir için)
+    - Create DTO'larında audit property'leri OLMAMALI
+    - Update DTO'larında audit property'leri OLMAMALI
+    - List/Detail DTO'larında audit property'leri olmalı
+  
+  asnotracking_configuration: |
+    DbContext'te global AsNoTracking aktif:
+    
+    protected override void OnConfiguring(DbContextOptionsBuilder optionsBuilder)
+    {
+        optionsBuilder.UseQueryTrackingBehavior(QueryTrackingBehavior.NoTracking);
+    }
+    
+    Performans optimizasyonu için:
+    - Read operasyonlarında entity tracking yok
+    - Update/Delete için _repository.Update(entity) ZORUNLU
+    - AsNoTracking aktif olduğu için Update() çağrılmazsa değişiklikler kaydedilmez
+    - SaveChangesAsync performansı artar
+  
+  update_delete_pattern: |
+    ⚠️ ÖNEMLİ: Global AsNoTracking aktif olduğu için Update/Delete işlemlerinde:
+    
+    1. Entity'yi GetByIdAsync() ile çek (AsNoTracking ile gelir)
+    2. Property'leri güncelle
+    3. _repository.Update(entity) çağır (ZORUNLU - Entity'yi context'e ekler)
+    4. SaveChangesAsync() çağır
+    
+    Örnek:
+    var product = await _repository.GetByIdAsync(id);  // AsNoTracking
+    product.Name = "Updated Name";
+    _repository.Update(product);  // Context'e attach eder, değişiklikleri track eder
+    await _repository.SaveChangesAsync();  // Database'e yazar
+    
+    Update() çağrılmazsa:
+    ❌ SaveChangesAsync() hiçbir şey yapmaz (tracking yok)
+    ❌ Değişiklikler database'e yazılmaz
+    ❌ Silent fail durumu oluşur
 
 # -----------------------------------------------------------------------------
 # LOCALIZATION (ÇOKLU DİL) KURALLARI
@@ -763,10 +1098,27 @@ signalr_rules:
 # -----------------------------------------------------------------------------
 performance_rules:
   database:
-    - AsNoTracking: "Global olarak aktif"
-    - Indexes: "Sık kullanılan kolonlar için"
-    - ProjectTo: "LINQ'da DTO mapping için"
-    - SplitQuery: "N+1 problemlerini önler"
+    asnotracking: |
+      - Global olarak aktif (QueryTrackingBehavior.NoTracking)
+      - Read operasyonlarında performans avantajı
+      - ⚠️ Update/Delete'de _repository.Update(entity) ZORUNLU
+      - Update() çağrılmazsa değişiklikler kaydedilmez
+    
+    indexes: "Sık kullanılan kolonlar için (Status, CreatedDate, UserId, vb.)"
+    projectto: "LINQ'da DTO mapping için (AutoMapper ProjectTo)"
+    splitquery: "N+1 problemlerini önler (UseQuerySplittingBehavior)"
+    
+    update_pattern: |
+      ✅ DOĞRU Pattern:
+      var entity = await _repository.GetByIdAsync(id);  // AsNoTracking ile gelir
+      entity.Property = newValue;
+      _repository.Update(entity);  // Context'e attach eder
+      await _repository.SaveChangesAsync();
+      
+      ❌ YANLIŞ Pattern:
+      var entity = await _repository.GetByIdAsync(id);
+      entity.Property = newValue;
+      await _repository.SaveChangesAsync();  // ❌ Hiçbir şey olmaz!
   
   caching:
     - Static data cache'lenir
@@ -781,8 +1133,201 @@ performance_rules:
     - Büyük listeler sayfalanır
     - PagedList<T> kullanılır
 
+# -----------------------------------------------------------------------------
+# PRIVACY VE VERİ MASKELEME KURALLARI
+# -----------------------------------------------------------------------------
+privacy_rules:
+  framework: "Custom PrivacyUtils"
+  purpose: "GDPR uyumluluğu ve kişisel veri koruma"
+  
+  masking_levels:
+    admin: "Kısmi maskeleme (MaskUserNameForAdmin)"
+    public: "Tam maskeleme (MaskUserNameForPublic)"
+  
+  protected_data:
+    - Email: "test***@example.com"
+    - PhoneNumber: "555****567"
+    - IdentityNumber: "123******89"
+    - Address: "Kısmi maskeleme"
+  
+  implementation: |
+    - PrivacyUtils utility sınıfı oluşturulur
+    - Null ve empty string kontrolleri yapılır
+    - Farklı kullanıcı seviyeleri için farklı maskeleme
+    - API response'larında otomatik maskeleme
+  
+  example: |
+    public static class PrivacyUtils
+    {
+        public static string MaskEmail(string email)
+        {
+            if (string.IsNullOrEmpty(email)) return email;
+            var parts = email.Split('@');
+            return $"{parts[0].Substring(0, 3)}***@{parts[1]}";
+        }
+        
+        public static string MaskPhone(string phone)
+        {
+            if (string.IsNullOrEmpty(phone) || phone.Length < 10) return phone;
+            return $"{phone.Substring(0, 3)}****{phone.Substring(phone.Length - 3)}";
+        }
+    }
+
+# -----------------------------------------------------------------------------
+# KULLANICI AKTİVİTE LOGLAMA KURALLARI
+# -----------------------------------------------------------------------------
+user_activity_logging_rules:
+  entity: "UserActivityLog"
+  storage_type: "Structured log (database)"
+  purpose: "Kullanıcı işlemlerini takip ve denetim"
+  
+  log_fields:
+    - UserId: "İşlemi yapan kullanıcı"
+    - Action: "Yapılan işlem (Create, Update, Delete, Login, vb.)"
+    - EntityType: "İşlem yapılan entity tipi"
+    - EntityId: "İşlem yapılan entity ID'si"
+    - Details: "İşlem detayları (JSON)"
+    - IPAddress: "İstek IP adresi"
+    - UserAgent: "Browser/Client bilgisi"
+    - CreatedDate: "İşlem zamanı"
+  
+  logged_actions:
+    - "Kullanıcı giriş/çıkış"
+    - "CRUD işlemleri (Create, Update, Delete)"
+    - "Kritik business işlemleri"
+    - "Dosya yükleme/silme"
+    - "Sistem ayarları değişiklikleri"
+    - "Hata durumları"
+  
+  log_levels:
+    - Info: "Normal işlemler"
+    - Warning: "Uyarı gerektiren işlemler"
+    - Error: "Hata durumları"
+    - Security: "Güvenlik olayları"
+  
+  automation: |
+    - Middleware ile otomatik loglama
+    - Action Filter ile controller bazlı loglama
+    - Service Interceptor ile business logic loglama
+    - Manuel loglama yapılmaz, otomatik sistem kullanılır
+  
+  retention: |
+    - GDPR uyumlu saklama süresi (90 gün)
+    - Otomatik temizleme job'ı (Background Jobs)
+    - Soft delete ile arşivleme
+
+# -----------------------------------------------------------------------------
+# GÜVENLİK VE YETKİLENDİRME KURALLARI
+# -----------------------------------------------------------------------------
+authorization_security_rules:
+  principle: "Kullanıcı sadece kendi verilerine erişebilir"
+  
+  endpoint_types:
+    user_endpoints:
+      - "[Authorize] attribute kullanılır"
+      - "CurrentUserId otomatik kullanılır"
+      - "URL'de userId parametresi KULLANILMAZ"
+      - "Örnek: GET /api/Orders/my-orders ✅"
+      - "Örnek: GET /api/Orders/user/{userId} ❌"
+    
+    admin_endpoints:
+      - "[Authorize(Roles = \"Admin\")] attribute kullanılır"
+      - "userId parametresi kullanılabilir"
+      - "Tüm kullanıcı verilerine erişim"
+      - "Örnek: GET /api/Admin/users/{userId} ✅"
+  
+  security_violations:
+    - "URL'de userId parametresi güvenlik açığı"
+    - "Kullanıcı başka kullanıcının verisini görebilir"
+    - "IDOR (Insecure Direct Object Reference) riski"
+  
+  best_practices:
+    - "BaseService.CurrentUserId kullan"
+    - "JWT token'dan kullanıcı bilgisi al"
+    - "Authorization filter'ları kullan"
+    - "Rol bazlı yetkilendirme yap"
+  
+  example: |
+    // ❌ YANLIŞ - Güvenlik açığı
+    [HttpGet("user/{userId}")]
+    public async Task<IActionResult> GetUserOrders(Guid userId)
+    {
+        // Kullanıcı başka kullanıcının siparişlerini görebilir!
+    }
+    
+    // ✅ DOĞRU - Güvenli
+    [HttpGet("my-orders")]
+    [Authorize]
+    public async Task<IActionResult> GetMyOrders()
+    {
+        // Service içinde CurrentUserId kullanılır
+        var orders = await _orderService.GetUserOrdersAsync();
+    }
+
+# -----------------------------------------------------------------------------
+# PERFORMANS VE STABİLİTE İYİLEŞTİRMELERİ
+# -----------------------------------------------------------------------------
+performance_stability_rules:
+  database_optimization:
+    indexes: |
+      - Sık kullanılan kolonlar için index oluştur
+      - Status, CreatedDate, UserId, EntityId kolonları
+      - Composite index'ler dikkatli kullan
+      - Foreign key'ler otomatik index'lenir
+    
+    query_optimization: |
+      - AsNoTracking global olarak aktif
+      - ProjectTo ile DTO mapping
+      - SplitQuery ile N+1 önleme
+      - Pagination zorunlu (büyük listeler için)
+    
+    connection_management: |
+      - Connection pool yönetimi
+      - Timeout ayarları (30-60 saniye)
+      - Lock timeout: 30000 ms
+      - Retry policy implementation
+  
+  signalr_optimization:
+    - ClientTimeoutInterval: "Minimum 60 saniye"
+    - KeepAliveInterval: "15 saniye"
+    - Connection mapping cleanup: "OnDisconnectedAsync'de"
+    - Hub method timeout handling
+  
+  transaction_handling:
+    lock_timeout: |
+      - SET LOCK_TIMEOUT 30000 (30 saniye)
+      - Lock timeout exception handling
+      - User-friendly error messages
+    
+    deadlock_handling: |
+      - SQL Exception Code 1205 (Deadlock)
+      - SQL Exception Code 1222 (Lock timeout)
+      - Otomatik retry mechanism
+      - Logging ve monitoring
+  
+  error_messages:
+    localization: "Tüm hata mesajları çoklu dil desteği ile"
+    user_friendly: "Teknik detaylar kullanıcıya gösterilmez"
+    logging: "Detaylı hata logları database'de"
+  
+  example: |
+    try
+    {
+        await _repository.SaveChangesAsync();
+    }
+    catch (SqlException ex) when (ex.Number == 1222)
+    {
+        _logger.LogWarning("Lock timeout: {Message}", ex.Message);
+        return Result<T>.Failure(_localization.GetString("Error.LockTimeout"));
+    }
+    catch (SqlException ex) when (ex.Number == 1205)
+    {
+        _logger.LogWarning("Deadlock: {Message}", ex.Message);
+        return Result<T>.Failure(_localization.GetString("Error.Deadlock"));
+    }
+
 # =====================================================================================
-# PROGRAM.CS KONFİGÜRASYONU ŞABLONUPhttps://chatgpt.com/c/678c7d9f-3f48-8001-87a8-24e4d265a74c
+# PROGRAM.CS KONFİGÜRASYONU ŞABLONU
 # =====================================================================================
 program_cs_template: |
   // 1. Builder oluşturma
@@ -882,7 +1427,80 @@ program_cs_template: |
   app.Run();
 
 # =====================================================================================
-# APPSETTINGS.JSON ŞABLONUhttps://chatgpt.com/c/678c7d9f-3f48-8001-87a8-24e4d265a74c
+# ENVIRONMENT VARIABLES VE KONFİGÜRASYON
+# =====================================================================================
+environment_configuration:
+  principle: "Hassas bilgiler environment variable'larda saklanır"
+  
+  environment_helper: |
+    EnvironmentHelper.ResolveEnvironmentVariable() metodu:
+    - appsettings.json'daki ${VARIABLE_NAME} formatını resolve eder
+    - Environment variable yoksa hata fırlatır (güvenlik)
+    - Production'da tüm hassas bilgiler environment variable'dan gelir
+  
+  required_variables:
+    - DATABASE_CONNECTION_STRING: "SQL Server bağlantı string'i"
+    - JWT_SECRET_KEY: "JWT token şifreleme key'i (min 32 karakter)"
+  
+  optional_variables:
+    - REDIS_CONNECTION_STRING: "Redis bağlantı string'i"
+    - AZURE_STORAGE_CONNECTION_STRING: "Azure Blob Storage"
+    - SMS_PROVIDER_API_KEY: "SMS servis API key'i"
+    - SMTP_PASSWORD: "Email servis şifresi"
+  
+  appsettings_format: |
+    {
+      "ConnectionStrings": {
+        "DefaultConnection": "${DATABASE_CONNECTION_STRING}"
+      },
+      "JwtSettings": {
+        "SecretKey": "${JWT_SECRET_KEY}",
+        "Issuer": "YourApp",
+        "Audience": "YourAppUsers"
+      },
+      "Redis": {
+        "ConnectionString": "${REDIS_CONNECTION_STRING:-localhost:6379}"
+      }
+    }
+    
+    Format açıklaması:
+    - ${VAR_NAME} - Zorunlu environment variable
+    - ${VAR_NAME:-default_value} - Opsiyonel (default değer ile)
+  
+  platform_specific:
+    windows_powershell: |
+      $env:DATABASE_CONNECTION_STRING = "Server=..."
+      $env:JWT_SECRET_KEY = "your-secret-key"
+    
+    linux_macos: |
+      export DATABASE_CONNECTION_STRING="Server=..."
+      export JWT_SECRET_KEY="your-secret-key"
+    
+    azure_app_service: |
+      Azure Portal → App Service → Configuration → Application Settings
+      - Name: DATABASE_CONNECTION_STRING
+      - Value: Server=tcp:...
+    
+    docker: |
+      docker run -e DATABASE_CONNECTION_STRING="Server=..." \
+                 -e JWT_SECRET_KEY="your-key" \
+                 yourapp:latest
+    
+    docker_compose: |
+      environment:
+        - DATABASE_CONNECTION_STRING=${DATABASE_CONNECTION_STRING}
+        - JWT_SECRET_KEY=${JWT_SECRET_KEY}
+  
+  security_best_practices:
+    - "Hassas bilgiler asla git'e commit edilmez"
+    - "appsettings.json'da placeholder kullanılır"
+    - "Production'da gerçek değerler environment variable'dan gelir"
+    - ".env dosyası .gitignore'a eklenir"
+    - "Secret key'ler minimum 32 karakter olmalı"
+    - "Connection string'ler şifrelenmeli (Azure Key Vault gibi)"
+
+# =====================================================================================
+# APPSETTINGS.JSON ŞABLONU
 # =====================================================================================
 appsettings_template: |
   {
@@ -1002,21 +1620,83 @@ project_structure: |
 # GELİŞTİRME SÜRECİ KURALLARI
 # =====================================================================================
 development_process:
-  before_starting:
-    - "README.md'yi oku (proje genel bilgileri)"
-    - ".cursorrules'ı oku (geliştirme kuralları)"
-    - "pwd.md'yi oku (yapılacaklar listesi)"
+  documentation_check:
+    order: |
+      Her işe başlamadan önce sırasıyla kontrol edilmeli:
+      1. README.md - Proje genel bilgileri ve MVP özellikleri
+      2. .cursorrules - Geliştirme kuralları ve teknoloji stack'i
+      3. pwd.md - Yapılacaklar listesi ve mevcut durum
+    
+    purpose: |
+      - Proje standardlarını anlamak
+      - Mevcut durumu görmek
+      - Tekrar eden işlerden kaçınmak
+      - Tutarlı geliştirme sağlamak
   
-  after_completing:
-    - "pwd.md'deki 'TAMAMLANAN GÖREVLER' bölümünü güncelle"
-    - "Yeni görev tespit edilirse 'YAPILACAK GÖREVLER' bölümüne ekle"
-    - "Her değişiklik sonrası pwd.md güncelle"
+  task_management:
+    pwd_md_usage: |
+      pwd.md dosyası proje geliştirme sürecinin ana takip dokümanıdır
+      
+      Yapısı:
+      - MEVCUT DURUM: Projenin şu anki durumu
+      - YAPILACAK GÖREVLER: Öncelik sırasına göre görevler
+      - TAMAMLANAN GÖREVLER: Tarih ve açıklama ile tamamlanan işler
+      - NOTLAR: Önemli notlar ve hatırlatmalar
+    
+    after_completing_task: |
+      1. pwd.md'deki "TAMAMLANAN GÖREVLER" bölümüne ekle
+      2. Tarih, görev açıklaması ve detayları yaz
+      3. "YAPILACAK GÖREVLER"den tamamlanan görevi çıkar
+      4. Yeni tespit edilen görevleri "YAPILACAK GÖREVLER"e ekle
+      5. "MEVCUT DURUM"u güncelle
+    
+    task_format: |
+      TAMAMLANAN GÖREV FORMATI:
+      - [2025-01-19] Kullanıcı yönetimi API'si oluşturuldu
+        - CRUD endpoint'leri
+        - JWT authentication
+        - Role-based authorization
+        - FluentValidation kuralları
+      
+      YAPILACAK GÖREV FORMATI:
+      - [ ] Ürün yönetimi API'si
+        - Öncelik: Yüksek
+        - Bağımlılık: Kategori sistemi tamamlanmalı
+        - Tahmini süre: 2 gün
   
   git_workflow:
-    - "Feature branch'lerde çalış (feature/user-management)"
-    - "Commit mesajları açıklayıcı olmalı (türkçe veya ingilizce)"
-    - "Pull request oluştur ve review bekle"
-    - "Main/master branch'e direkt push yapma"
+    branching: |
+      - Feature: feature/user-management
+      - Bugfix: bugfix/login-error
+      - Hotfix: hotfix/security-patch
+      - Release: release/v1.0.0
+    
+    commit_messages: |
+      - feat: Yeni özellik eklendi
+      - fix: Bug düzeltildi
+      - docs: Dokümantasyon güncellendi
+      - style: Kod formatı düzenlendi
+      - refactor: Kod refactor edildi
+      - test: Test eklendi/güncellendi
+      - chore: Genel bakım işleri
+    
+    pull_request: |
+      1. Feature branch'de çalış
+      2. Commit'leri açıklayıcı yap
+      3. PR oluştur (template kullan)
+      4. Code review bekle
+      5. Feedback'leri uygula
+      6. Approve'dan sonra merge et
+      7. Main/master'a direkt push YAPMA
+  
+  code_review_checklist:
+    - "Kod standartlarına uygun mu?"
+    - "Test coverage yeterli mi?"
+    - "Dokümantasyon güncel mi?"
+    - "Performance etkileri değerlendirildi mi?"
+    - "Security açıkları kontrol edildi mi?"
+    - "Breaking change var mı?"
+    - "Backward compatibility sağlandı mı?"
 
 # =====================================================================================
 # TEST KURALLARI
@@ -1091,11 +1771,34 @@ common_issues:
     - "Token expiration süresi geçmiş mi?"
     - "User role'leri doğru atanmış mı?"
   
+  update_not_working:
+    problem: "Update/Delete işlemleri çalışmıyor, değişiklikler database'e yazılmıyor"
+    cause: "Global AsNoTracking aktif, _repository.Update(entity) çağrılmamış"
+    solution: |
+      ⚠️ KRİTİK: Global AsNoTracking aktif olduğu için Update/Delete'de:
+      
+      var entity = await _repository.GetByIdAsync(id);  // AsNoTracking ile gelir
+      entity.Property = newValue;
+      _repository.Update(entity);  // ✅ ZORUNLU - Bu satır olmadan çalışmaz!
+      await _repository.SaveChangesAsync();
+      
+      Update() çağrısı:
+      - Entity'yi DbContext'e attach eder
+      - Değişiklikleri track eder
+      - SaveChangesAsync() işe yarar hale gelir
+    debugging: |
+      Test etmek için:
+      1. Değişikliği yap
+      2. SaveChangesAsync() sonrası affected rows kontrol et
+      3. Eğer 0 dönüyorsa Update() çağrısı eksik
+      4. SQL Profiler ile generated query'leri izle
+  
   performance_issues:
     - "N+1 query problemi var mı? (SplitQuery kullan)"
     - "Index'ler tanımlı mı?"
     - "AsNoTracking kullanılıyor mu?"
     - "Pagination uygulanmış mı?"
+    - "_repository.Update() gereksiz yerde çağrılıyor mu? (Read-only'de gereksiz)"
   
   signalr_issues:
     - "JWT token WebSocket'te iletiliyor mu?"
@@ -1120,9 +1823,10 @@ additional_resources:
     - "Serilog Analyzer (Log analysis)"
 
 # =====================================================================================
-# NOTLAR
+# NOTLAR VE ÖNEMLİ HATIRLATMALAR
 # =====================================================================================
 notes: |
+  📌 GENEL NOTLAR:
   - Bu şablon Maggsoft Framework tabanlı projeler içindir
   - Her proje için özelleştirilebilir
   - Teknoloji stack projeye göre değiştirilebilir
@@ -1132,11 +1836,106 @@ notes: |
   - Performance optimization sürekli göz önünde bulundurulur
   - Çoklu dil desteği standart olarak eklenir
   - Background jobs ve real-time features opsiyoneldir
+  
+  ⚠️ KRİTİK HATIRLATMALAR:
+  
+  1. **AsNoTracking ve Update Pattern:**
+     - Global AsNoTracking AKTIF
+     - Update/Delete işlemlerinde _repository.Update(entity) ZORUNLU
+     - Update() çağrılmazsa değişiklikler database'e YAZILMAZ
+     - Silent fail riski yüksek - dikkatli olun!
+     
+     ✅ DOĞRU:
+     var entity = await _repository.GetByIdAsync(id);
+     entity.Name = "Updated";
+     _repository.Update(entity);  // ⚠️ ZORUNLU
+     await _repository.SaveChangesAsync();
+     
+     ❌ YANLIŞ:
+     var entity = await _repository.GetByIdAsync(id);
+     entity.Name = "Updated";
+     await _repository.SaveChangesAsync();  // ❌ Çalışmaz!
+  
+  2. **Güvenlik - userId Parametresi:**
+     - URL'de userId parametresi KULLANILMAZ (admin hariç)
+     - CurrentUserId otomatik kullanılır (BaseService'ten)
+     - IDOR (Insecure Direct Object Reference) riski önlenir
+     
+     ✅ DOĞRU: GET /api/Orders/my-orders
+     ❌ YANLIŞ: GET /api/Orders/user/{userId}
+  
+  3. **Soft Delete:**
+     - Hard delete ASLA yapılmaz
+     - SoftDelete() metodu kullanılır
+     - _repository.Update(entity) ile kaydedilir
+     - Global query filter aktif (IsActive && !IsDeleted)
+  
+  4. **Audit Bilgileri:**
+     - CreatedDate, CreatorUserId (Insert)
+     - UpdatedDate, UpdatedByUserId, UpdatedIP (Update)
+     - CurrentUserId ve RemoteIp otomatik (BaseService)
+  
+  5. **Filtreleme - Null Safety:**
+     - Navigation property'lerde null kontrolü ZORUNLU
+     - Null-safe operatörler (?.) kullanılır
+     - string.IsNullOrEmpty() kontrolleri yapılır
+  
+  6. **Environment Variables:**
+     - Hassas bilgiler asla git'e commit edilmez
+     - ${VARIABLE_NAME} formatı kullanılır
+     - Production'da environment variable ZORUNLU
+     - EnvironmentHelper.ResolveEnvironmentVariable() kullanılır
+  
+  7. **Service Simplification:**
+     - YAGNI - Gereksiz kod yazılmaz
+     - Generic metodlar tercih edilir
+     - Query parametreleri ile esnek filtreleme
+     - Interface'lerde sadece gerekli metodlar
+  
+  8. **Migration:**
+     - FluentMigrator + MaggsoftMigration attribute
+     - Migration sıralaması önemli (tarih formatı)
+     - Index'ler migration'da oluşturulur
+     - Audit fields her tabloda olmalı
+  
+  9. **Localization:**
+     - Language, LocaleStringResource, LocalizedProperty
+     - HTTP Header: X-Language (tr, en, de)
+     - Cache ile optimize edilir
+     - API response'larında çoklu dil desteği
+  
+  10. **Performance:**
+      - AsNoTracking global olarak aktif
+      - Index'ler sık kullanılan kolonlarda
+      - ProjectTo ile DTO mapping
+      - Pagination büyük listelerde zorunlu
+      - SplitQuery ile N+1 önleme
 
 # =====================================================================================
 # VERSİYON BİLGİSİ
 # =====================================================================================
-template_version: "1.0.0"
+template_version: "1.1.0"
 last_updated: "2025-01-19"
 author: "Maggsoft Framework Development Team"
+
+changelog:
+  v1.1.0:
+    date: "2025-01-19"
+    changes:
+      - "⚠️ KRİTİK: Update/Delete metodlarına _repository.Update(entity) çağrısı eklendi"
+      - "AsNoTracking pattern'i için detaylı açıklamalar eklendi"
+      - "Update() çağrısının neden zorunlu olduğu dokümante edildi"
+      - "TROUBLESHOOTING bölümüne 'update_not_working' problemi eklendi"
+      - "Performance rules'a AsNoTracking update pattern'i eklendi"
+      - "Service rules'a update_pattern uyarısı eklendi"
+      - "Audit tracking rules'a update_delete_pattern açıklaması eklendi"
+      - "Tüm örnek kodlara _repository.Update(entity) çağrısı eklendi"
+      - "Kritik hatırlatmalar bölümü genişletildi"
+  
+  v1.0.0:
+    date: "2025-01-19"
+    changes:
+      - "İlk template versiyonu oluşturuldu"
+      - "Tüm Maggsoft Framework standartları eklendi"
+      - "Kapsamlı örnekler ve best practices eklendi"
 
